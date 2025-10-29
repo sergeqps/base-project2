@@ -1,11 +1,12 @@
 import os
-import sqlite3
+import psycopg2
 import logging
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 import io
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackContext, MessageHandler, filters
+import urllib.parse as urlparse
 
 # Настройка логирования
 logging.basicConfig(
@@ -13,98 +14,128 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ⚠️ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+# 🔐 ВАШ ТОКЕН БОТА
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-YOUR_USER_ID = int(os.getenv('YOUR_USER_ID', '123456789'))
+YOUR_USER_ID = int(os.getenv('YOUR_USER_ID', '7892045071'))
 
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не установлен! Добавьте его в переменные окружения.")
+    raise ValueError("❌ BOT_TOKEN не установлен!")
 
-print("🛡️ Бот базы скамеров запускается...")
-print(f"✅ YOUR_USER_ID: {YOUR_USER_ID}")
-print(f"🔑 BOT_TOKEN существует: {os.getenv('BOT_TOKEN') is not None}")
-
-# ЕСЛИ ТОКЕНА НЕТ - ВЫХОДИМ
-if not BOT_TOKEN:
-    print("❌ КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден!")
-    print("💡 Проверьте переменные окружения в Railway")
-    exit(1)
+# 🔗 ПОДКЛЮЧЕНИЕ К POSTGRESQL
+def get_connection():
+    """Получить соединение с PostgreSQL"""
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        raise ValueError("❌ DATABASE_URL не установлен!")
     
-conn = sqlite3.connect('scammers.db', check_same_thread=False)
+    # Парсим URL для Railway
+    url = urlparse.urlparse(database_url)
+    dbname = url.path[1:]
+    user = url.username
+    password = url.password
+    host = url.hostname
+    port = url.port
+    
+    return psycopg2.connect(
+        dbname=dbname,
+        user=user,
+        password=password,
+        host=host,
+        port=port,
+        sslmode='require'
+    )
+
+# Глобальное соединение
+conn = get_connection()
 cursor = conn.cursor()
 
 def init_db():
+    """Инициализация таблиц в PostgreSQL"""
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS scammers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER UNIQUE NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE NOT NULL,
             username TEXT,
             proof TEXT NOT NULL,
-            added_by INTEGER NOT NULL,
+            added_by BIGINT NOT NULL,
             added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             scam_type TEXT
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admins (
-            admin_id INTEGER PRIMARY KEY,
+            admin_id BIGINT PRIMARY KEY,
             username TEXT,
             role TEXT NOT NULL DEFAULT 'admin'
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS bans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
             username TEXT,
             reason TEXT NOT NULL,
-            banned_by INTEGER NOT NULL,
+            banned_by BIGINT NOT NULL,
             ban_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            chat_id INTEGER
+            chat_id BIGINT
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS warns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
             username TEXT,
             reason TEXT NOT NULL,
-            warned_by INTEGER NOT NULL,
+            warned_by BIGINT NOT NULL,
             warn_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            chat_id INTEGER
+            chat_id BIGINT
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS mutes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
             username TEXT,
             reason TEXT NOT NULL,
-            muted_by INTEGER NOT NULL,
+            muted_by BIGINT NOT NULL,
             mute_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             unmute_date TIMESTAMP,
-            chat_id INTEGER
+            chat_id BIGINT
         )
     ''')
-    cursor.execute("INSERT OR IGNORE INTO admins (admin_id, role) VALUES (?, 'owner')", (YOUR_USER_ID,))
+    # Добавляем владельца если его нет
+    cursor.execute("INSERT INTO admins (admin_id, username, role) VALUES (%s, %s, 'owner') ON CONFLICT (admin_id) DO NOTHING", (YOUR_USER_ID, 'owner'))
     conn.commit()
-    print("✅ База данных инициализирована")
+
+def ensure_connection():
+    """Проверить и восстановить соединение с БД"""
+    global conn, cursor
+    try:
+        cursor.execute("SELECT 1")
+    except:
+        print("🔁 Восстанавливаем соединение с БД...")
+        conn = get_connection()
+        cursor = conn.cursor()
 
 def is_owner(user_id):
-    cursor.execute("SELECT 1 FROM admins WHERE admin_id = ? AND role = 'owner'", (user_id,))
+    ensure_connection()
+    cursor.execute("SELECT 1 FROM admins WHERE admin_id = %s AND role = 'owner'", (user_id,))
     return cursor.fetchone() is not None
 
 def is_admin(user_id):
-    cursor.execute("SELECT 1 FROM admins WHERE admin_id = ?", (user_id,))
+    ensure_connection()
+    cursor.execute("SELECT 1 FROM admins WHERE admin_id = %s", (user_id,))
     return cursor.fetchone() is not None
 
 def get_user_role(user_id):
-    cursor.execute("SELECT role FROM admins WHERE admin_id = ?", (user_id,))
+    ensure_connection()
+    cursor.execute("SELECT role FROM admins WHERE admin_id = %s", (user_id,))
     result = cursor.fetchone()
     return result[0] if result else 'user'
 
 def is_target_owner(target_username):
-    cursor.execute("SELECT 1 FROM admins WHERE username = ? AND role = 'owner'", (target_username,))
+    ensure_connection()
+    cursor.execute("SELECT 1 FROM admins WHERE username = %s AND role = 'owner'", (target_username,))
     return cursor.fetchone() is not None
 
 def create_status_image(status, user_info=""):
@@ -160,13 +191,14 @@ def only_in_chats(func):
 
 @only_in_chats
 async def start(update: Update, context: CallbackContext):
+    ensure_connection()
     user_id = update.effective_user.id
     username = update.effective_user.username
     full_name = update.effective_user.full_name
     chat_title = update.effective_chat.title
     
     if is_admin(user_id) and username:
-        cursor.execute("UPDATE admins SET username = ? WHERE admin_id = ?", (username, user_id))
+        cursor.execute("UPDATE admins SET username = %s WHERE admin_id = %s", (username, user_id))
         conn.commit()
     
     role = get_user_role(user_id)
@@ -191,18 +223,19 @@ async def start(update: Update, context: CallbackContext):
         text += "• /unmute @username - Размутить\n"
         text += "• /warns @username - Посмотреть варны\n"
         text += "• /banlist - Список банов\n"
-        text += "• /add_scammer user_id|пруфы|тип - Добавить скамера\n"
+        text += "• /add_scammer user_id @username|пруфы|тип - Добавить скамера\n"
     
     if is_owner(user_id):
         text += "\n👑 Команды владельца:\n"
-        text += "• /add_admin @username - Добавить администратора\n"
-        text += "• /add_owner @username - Добавить владельца\n"
+        text += "• /add_admin user_id @username - Добавить администратора\n"
+        text += "• /add_owner user_id @username - Добавить владельца\n"
         text += "• /list_admins - Список администраторов\n"
     
     await update.message.reply_text(text)
 
 @only_in_chats
 async def help_command(update: Update, context: CallbackContext):
+    ensure_connection()
     user_id = update.effective_user.id
     
     text = (
@@ -225,7 +258,7 @@ async def help_command(update: Update, context: CallbackContext):
             "• /unmute @username - Размутить\n"
             "• /warns @username - Варны пользователя\n"
             "• /banlist - Список банов\n"
-            "• /add_scammer user_id|пруфы|тип - Добавить скамера\n\n"
+            "• /add_scammer user_id @username|пруфы|тип - Добавить скамера\n\n"
             "⚠️ Невозможно выдать санкции владельцу!\n\n"
             "Примеры:\n"
             "/ban @username Спам\n"
@@ -237,8 +270,8 @@ async def help_command(update: Update, context: CallbackContext):
     if is_owner(user_id):
         text += (
             "👑 Команды владельца:\n"
-            "• /add_admin @username - Добавить администратора\n"
-            "• /add_owner @username - Добавить владельца\n"
+            "• /add_admin user_id @username - Добавить администратора\n"
+            "• /add_owner user_id @username - Добавить владельца\n"
             "• /list_admins - Список администраторов\n"
         )
     
@@ -246,225 +279,47 @@ async def help_command(update: Update, context: CallbackContext):
 
 @only_in_chats
 async def check_user(update: Update, context: CallbackContext):
-    if not context.args:
-        await update.message.reply_text("❌ Использование: /check @username или /check 123456789")
-        return
-    
-    search_query = context.args[0]
-
-    # Сначала проверяем базу скамеров
-    if search_query.isdigit():
-        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE user_id = ?", (int(search_query),))
-        scammer_data = cursor.fetchone()
-        
-        if scammer_data:
-            user_id, username, proof, scam_type = scammer_data
-            user_info = f"ID: {user_id}" + (f" | @{username}" if username else "")
-            image_bytes = create_status_image('скамер', user_info)
-            
-            text = f"🚨 НАЙДЕН В БАЗЕ СКАМЕРОВ!\n\n👤 ID: `{user_id}`\n"
-            if username:
-                text += f"📱 Username: @{username}\n"
-            if scam_type:
-                text += f"🎯 Тип скама: {scam_type}\n"
-            text += f"📝 Пруфы: {proof}"
-            
-            await update.message.reply_photo(
-                photo=image_bytes,
-                caption=text,
-                parse_mode='Markdown'
-            )
-            return
-
-    elif search_query.startswith('@'):
-        username = search_query[1:].lower()
-        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE LOWER(username) = ?", (username,))
-        scammer_data = cursor.fetchone()
-        
-        if scammer_data:
-            user_id, username, proof, scam_type = scammer_data
-            user_info = f"ID: {user_id} | @{username}"
-            image_bytes = create_status_image('скамер', user_info)
-            
-            text = f"🚨 НАЙДЕН В БАЗЕ СКАМЕРОВ!\n\n👤 ID: `{user_id}`\n📱 Username: @{username}\n"
-            if scam_type:
-                text += f"🎯 Тип скама: {scam_type}\n"
-            text += f"📝 Пруфы: {proof}"
-            
-            await update.message.reply_photo(
-                photo=image_bytes,
-                caption=text,
-                parse_mode='Markdown'
-            )
-            return
-
-    # Если не найден в скамерах, проверяем админов
-    if search_query.isdigit():
-        cursor.execute("SELECT admin_id, username, role FROM admins WHERE admin_id = ?", (int(search_query),))
-        admin_data = cursor.fetchone()
-        
-        if admin_data:
-            admin_id, username, role = admin_data
-            user_info = f"ID: {admin_id}" + (f" | @{username}" if username else "")
-            image_bytes = create_status_image('владелец' if role == 'owner' else 'администратор', user_info)
-            
-            role_text = "👑 ВЛАДЕЛЕЦ" if role == 'owner' else "👮 АДМИНИСТРАТОР"
-            text = f"{role_text}\n\n👤 ID: `{admin_id}`\n"
-            if username:
-                text += f"📱 Username: @{username}\n"
-            text += f"💼 Роль: {role}"
-            
-            await update.message.reply_photo(
-                photo=image_bytes,
-                caption=text,
-                parse_mode='Markdown'
-            )
-            return
-
-    elif search_query.startswith('@'):
-        username = search_query[1:].lower()
-        cursor.execute("SELECT admin_id, username, role FROM admins WHERE LOWER(username) = ?", (username,))
-        admin_data = cursor.fetchone()
-
-@only_in_chats
-async def add_owner(update: Update, context: CallbackContext):
-    """Добавить владельца - только для текущего владельца"""
-    user_id = update.effective_user.id
-    
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Только владелец бота может добавлять других владельцев!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Использование: /add_owner @username")
-        return
-    
-    target_username = context.args[0]
-    
-    if not target_username.startswith('@'):
-        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
-        return
-    
-    target_username = target_username[1:]
-    
-    try:
-        # Здесь нужно получить ID пользователя по username
-        # Пока добавляем с ID=0, нужно будет получить реальный ID
-        cursor.execute("INSERT OR REPLACE INTO admins (admin_id, username, role) VALUES (?, ?, 'owner')",
-                      (0, target_username))
-        conn.commit()
-        
-        await update.message.reply_text(f"✅ Пользователь @{target_username} добавлен как владелец!\n\n⚠️ Нужно указать его ID вручную в базе данных.")
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при добавлении владельца: {str(e)}")
-
-@only_in_chats
-async def add_admin(update: Update, context: CallbackContext):
-    """Добавить администратора - только для владельца"""
-    user_id = update.effective_user.id
-    
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Только владелец бота может добавлять администраторов!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Использование: /add_admin @username")
-        return
-    
-    target_username = context.args[0]
-    
-    if not target_username.startswith('@'):
-        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
-        return
-    
-    target_username = target_username[1:]
-    
-    try:
-        cursor.execute("INSERT OR REPLACE INTO admins (admin_id, username, role) VALUES (?, ?, 'admin')",
-                      (0, target_username))
-        conn.commit()
-        
-        await update.message.reply_text(f"✅ Пользователь @{target_username} добавлен как администратор!\n\n⚠️ Нужно указать его ID вручную в базе данных.")
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при добавлении администратора: {str(e)}")
-
-@only_in_chats
-async def list_admins(update: Update, context: CallbackContext):
-    """Показать список всех администраторов"""
-    cursor.execute("SELECT admin_id, username, role FROM admins ORDER BY role DESC, username")
-    admins = cursor.fetchall()
-    
-    if not admins:
-        await update.message.reply_text("📋 Список администраторов пуст")
-        return
-    
-    text = "👑 ВЛАДЕЛЬЦЫ:\n"
-    owners = [admin for admin in admins if admin[2] == 'owner']
-    for admin in owners:
-        admin_id, username, role = admin
-        text += f"• ID: {admin_id}" + (f" | @{username}" if username else "") + "\n"
-    
-    text += "\n👮 АДМИНИСТРАТОРЫ:\n"
-    admins_list = [admin for admin in admins if admin[2] == 'admin']
-    for admin in admins_list:
-        admin_id, username, role = admin
-        text += f"• ID: {admin_id}" + (f" | @{username}" if username else "") + "\n"
-    
-    await update.message.reply_text(text)
-    
-@only_in_chats
-async def check_user(update: Update, context: CallbackContext):
-    """Проверить пользователя"""
+    ensure_connection()
     if not context.args:
         await update.message.reply_text("❌ Использование: /check @username или /check 123456789")
         return
     
     search_query = context.args[0].strip()
-    print(f"🔍 Поиск: {search_query}")  # Для отладки
+    print(f"🔍 Поиск: {search_query}")
 
     # Проверяем базу скамеров
     if search_query.isdigit():
-        # Поиск по ID в скамерах
-        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE user_id = ?", (int(search_query),))
+        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE user_id = %s", (int(search_query),))
         scammer_data = cursor.fetchone()
         
         if scammer_data:
             user_id, username, proof, scam_type = scammer_data
-            user_info = f"ID: {user_id}" + (f" | @{username}" if username else "")
-            
             text = f"🚨 НАЙДЕН В БАЗЕ СКАМЕРОВ!\n\n👤 ID: `{user_id}`\n"
             if username:
                 text += f"📱 Username: @{username}\n"
             if scam_type:
                 text += f"🎯 Тип скама: {scam_type}\n"
             text += f"📝 Пруфы: {proof}"
-            
             await update.message.reply_text(text, parse_mode='Markdown')
             return
 
     elif search_query.startswith('@'):
-        # Поиск по username в скамерах
         username = search_query[1:].lower()
-        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE LOWER(username) = ?", (username,))
+        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE LOWER(username) = %s", (username,))
         scammer_data = cursor.fetchone()
         
         if scammer_data:
             user_id, username, proof, scam_type = scammer_data
-            user_info = f"ID: {user_id} | @{username}"
-            
             text = f"🚨 НАЙДЕН В БАЗЕ СКАМЕРОВ!\n\n👤 ID: `{user_id}`\n📱 Username: @{username}\n"
             if scam_type:
                 text += f"🎯 Тип скама: {scam_type}\n"
             text += f"📝 Пруфы: {proof}"
-            
             await update.message.reply_text(text, parse_mode='Markdown')
             return
 
     # Проверяем админов
     if search_query.isdigit():
-        cursor.execute("SELECT admin_id, username, role FROM admins WHERE admin_id = ?", (int(search_query),))
+        cursor.execute("SELECT admin_id, username, role FROM admins WHERE admin_id = %s", (int(search_query),))
         admin_data = cursor.fetchone()
         
         if admin_data:
@@ -474,28 +329,53 @@ async def check_user(update: Update, context: CallbackContext):
             if username:
                 text += f"📱 Username: @{username}\n"
             text += f"💼 Роль: {role}"
-            
             await update.message.reply_text(text, parse_mode='Markdown')
             return
 
     elif search_query.startswith('@'):
         username = search_query[1:].lower()
-        cursor.execute("SELECT admin_id, username, role FROM admins WHERE LOWER(username) = ?", (username,))
+        cursor.execute("SELECT admin_id, username, role FROM admins WHERE LOWER(username) = %s", (username,))
         admin_data = cursor.fetchone()
         
         if admin_data:
             admin_id, username, role = admin_data
             role_text = "👑 ВЛАДЕЛЕЦ" if role == 'owner' else "👮 АДМИНИСТРАТОР"
             text = f"{role_text}\n\n👤 ID: `{admin_id}`\n📱 Username: @{username}\n💼 Роль: {role}"
-            
             await update.message.reply_text(text, parse_mode='Markdown')
             return
 
     # Если не найден нигде
     text = "✅ ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ\n\nНе найден в базе скамеров и не является администратором."
     await update.message.reply_text(text, parse_mode='Markdown')
+
+@only_in_chats
+async def stats(update: Update, context: CallbackContext):
+    ensure_connection()
+    cursor.execute("SELECT COUNT(*) FROM scammers")
+    scammer_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM admins")
+    admin_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM bans")
+    ban_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM warns")
+    warn_count = cursor.fetchone()[0]
+    
+    text = (
+        f"📊 СТАТИСТИКА БАЗЫ ДАННЫХ:\n\n"
+        f"🚨 Скамеров в базе: {scammer_count}\n"
+        f"👮 Администраторов: {admin_count}\n"
+        f"🔨 Активных банов: {ban_count}\n"
+        f"⚠️ Всего варнов: {warn_count}"
+    )
+    
+    await update.message.reply_text(text)
+
 @only_in_chats
 async def add_scammer(update: Update, context: CallbackContext):
+    ensure_connection()
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -504,10 +384,10 @@ async def add_scammer(update: Update, context: CallbackContext):
     
     if not context.args:
         await update.message.reply_text(
-            "❌ Использование: /add_scammer user_id|пруфы|тип\n\n"
+            "❌ Использование: /add_scammer user_id @username|пруфы|тип\n\n"
             "Примеры:\n"
-            "/add_scammer 123456789|Кинул на 1000р|Невывод средств\n"
-            "/add_scammer @scammer|Обман при обмене|Фейковый обменник"
+            "/add_scammer 123456789 @scammer|Кинул на 1000р|Невывод\n"
+            "/add_scammer 987654321 @baduser|Обман при обмене|Фейковый обменник"
         )
         return
     
@@ -516,46 +396,48 @@ async def add_scammer(update: Update, context: CallbackContext):
     try:
         parts = data.split('|')
         if len(parts) < 2:
-            await update.message.reply_text("❌ Неверный формат. Нужно: user_id|пруфы|тип")
+            await update.message.reply_text("❌ Неверный формат. Нужно: user_id @username|пруфы|тип")
             return
         
-        user_id_part = parts[0].strip()
+        first_part = parts[0].strip().split()
+        if len(first_part) < 2:
+            await update.message.reply_text("❌ Укажите ID и username! Формат: user_id @username")
+            return
+        
+        user_id_part = first_part[0]
+        username_part = first_part[1]
+        
+        if not user_id_part.isdigit():
+            await update.message.reply_text("❌ User ID должен быть числом!")
+            return
+        
+        scammer_id = int(user_id_part)
+        
+        if not username_part.startswith('@'):
+            await update.message.reply_text("❌ Username должен начинаться с @!")
+            return
+        
+        username = username_part[1:].lower()
         proof = parts[1].strip()
-        scam_type = parts[2].strip() if len(parts) > 3 else "Не указан"
+        scam_type = parts[2].strip() if len(parts) > 2 else "Не указан"
         
-        if user_id_part.isdigit():
-            scammer_id = int(user_id_part)
-            username = None
-        elif user_id_part.startswith('@'):
-            username = user_id_part[1:].lower()
-            scammer_id = None
-            await update.message.reply_text("❌ Для добавления скамера нужен User ID, а не username.")
-            return
-        else:
-            await update.message.reply_text("❌ User ID должен быть числом или username начинаться с @")
-            return
-        
-        if scammer_id is None:
-            return
-        
-        cursor.execute("SELECT 1 FROM scammers WHERE user_id = ?", (scammer_id,))
+        cursor.execute("SELECT 1 FROM scammers WHERE user_id = %s OR username = %s", (scammer_id, username))
         if cursor.fetchone():
-            await update.message.reply_text("❌ Этот пользователь уже есть в базе скамеров.")
+            await update.message.reply_text("❌ Этот пользователь уже есть в базе скамеров!")
             return
         
-        cursor.execute("INSERT INTO scammers (user_id, username, proof, added_by, scam_type) VALUES (?, ?, ?, ?, ?)",
+        cursor.execute("INSERT INTO scammers (user_id, username, proof, added_by, scam_type) VALUES (%s, %s, %s, %s, %s)",
                       (scammer_id, username, proof, user_id, scam_type))
         conn.commit()
         
-        await update.message.reply_text("✅ Скамер успешно добавлен в базу!")
+        await update.message.reply_text(f"✅ Скамер добавлен!\n👤 ID: {scammer_id}\n📱 Username: @{username}\n🎯 Тип: {scam_type}")
         
-    except ValueError:
-        await update.message.reply_text("❌ User ID должен быть числом")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при добавлении: {str(e)}")
 
 @only_in_chats
 async def ban_user(update: Update, context: CallbackContext):
+    ensure_connection()
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     
@@ -576,13 +458,12 @@ async def ban_user(update: Update, context: CallbackContext):
     
     target_username = target_username[1:]
     
-    # Проверяем, не является ли целевой пользователь владельцем
     if is_target_owner(target_username):
         await update.message.reply_text("❌ Невозможно забанить владельца!")
         return
     
     try:
-        cursor.execute("INSERT INTO bans (user_id, username, reason, banned_by, chat_id) VALUES (?, ?, ?, ?, ?)",
+        cursor.execute("INSERT INTO bans (user_id, username, reason, banned_by, chat_id) VALUES (%s, %s, %s, %s, %s)",
                       (0, target_username, reason, user_id, chat_id))
         conn.commit()
         
@@ -593,6 +474,7 @@ async def ban_user(update: Update, context: CallbackContext):
 
 @only_in_chats
 async def unban_user(update: Update, context: CallbackContext):
+    ensure_connection()
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -612,7 +494,7 @@ async def unban_user(update: Update, context: CallbackContext):
     target_username = target_username[1:]
     
     try:
-        cursor.execute("DELETE FROM bans WHERE username = ?", (target_username,))
+        cursor.execute("DELETE FROM bans WHERE username = %s", (target_username,))
         conn.commit()
         
         if cursor.rowcount > 0:
@@ -625,6 +507,7 @@ async def unban_user(update: Update, context: CallbackContext):
 
 @only_in_chats
 async def warn_user(update: Update, context: CallbackContext):
+    ensure_connection()
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     
@@ -645,17 +528,16 @@ async def warn_user(update: Update, context: CallbackContext):
     
     target_username = target_username[1:]
     
-    # Проверяем, не является ли целевой пользователь владельцем
     if is_target_owner(target_username):
         await update.message.reply_text("❌ Невозможно выдать варн владельцу!")
         return
     
     try:
-        cursor.execute("INSERT INTO warns (user_id, username, reason, warned_by, chat_id) VALUES (?, ?, ?, ?, ?)",
+        cursor.execute("INSERT INTO warns (user_id, username, reason, warned_by, chat_id) VALUES (%s, %s, %s, %s, %s)",
                       (0, target_username, reason, user_id, chat_id))
         conn.commit()
         
-        cursor.execute("SELECT COUNT(*) FROM warns WHERE username = ?", (target_username,))
+        cursor.execute("SELECT COUNT(*) FROM warns WHERE username = %s", (target_username,))
         warn_count = cursor.fetchone()[0]
         
         await update.message.reply_text(
@@ -665,325 +547,11 @@ async def warn_user(update: Update, context: CallbackContext):
         )
         
         if warn_count >= 3:
-            cursor.execute("INSERT INTO bans (user_id, username, reason, banned_by, chat_id) VALUES (?, ?, ?, ?, ?)",
+            cursor.execute("INSERT INTO bans (user_id, username, reason, banned_by, chat_id) VALUES (%s, %s, %s, %s, %s)",
                           (0, target_username, f"Автобан за 3 варна (последний: {reason})", user_id, chat_id))
-            cursor.execute("DELETE FROM warns WHERE username = ?", (target_username,))
+            cursor.execute("DELETE FROM warns WHERE username = %s", (target_username,))
             conn.commit()
             
             await update.message.reply_text(
                 f"🚨 АВТОМАТИЧЕСКИЙ БАН!\n"
-                f"Пользователь @{target_username} получил бан за 3 варна.\n"
-                f"Причина последнего варна: {reason}"
-            )
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при выдаче варна: {str(e)}")
-
-@only_in_chats
-async def mute_user(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Только администраторы могут мутить пользователей!")
-        return
-    
-    if not context.args or len(context.args) < 3:
-        await update.message.reply_text("❌ Использование: /mute @username время причина\n\nПримеры:\n/mute @username 1h Флуд\n/mute @username 30m Реклама")
-        return
-    
-    target_username = context.args[0]
-    time_str = context.args[1]
-    reason = ' '.join(context.args[2:])
-    
-    if not target_username.startswith('@'):
-        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
-        return
-    
-    target_username = target_username[1:]
-    
-    # Проверяем, не является ли целевой пользователь владельцем
-    if is_target_owner(target_username):
-        await update.message.reply_text("❌ Невозможно замутить владельца!")
-        return
-    
-    try:
-        if time_str.endswith('m'):
-            minutes = int(time_str[:-1])
-            mute_duration = timedelta(minutes=minutes)
-        elif time_str.endswith('h'):
-            hours = int(time_str[:-1])
-            mute_duration = timedelta(hours=hours)
-        elif time_str.endswith('d'):
-            days = int(time_str[:-1])
-            mute_duration = timedelta(days=days)
-        else:
-            await update.message.reply_text("❌ Неверный формат времени. Используйте: 30m, 1h, 1d")
-            return
-        
-        unmute_date = datetime.now() + mute_duration
-        
-        cursor.execute("INSERT INTO mutes (user_id, username, reason, muted_by, unmute_date, chat_id) VALUES (?, ?, ?, ?, ?, ?)",
-                      (0, target_username, reason, user_id, unmute_date, chat_id))
-        conn.commit()
-        
-        await update.message.reply_text(
-            f"🔇 Пользователь @{target_username} замьючен!\n"
-            f"Время: {time_str}\n"
-            f"Причина: {reason}\n"
-            f"Размут: {unmute_date.strftime('%d.%m.%Y %H:%M')}"
-        )
-        
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат времени. Используйте: 30m, 1h, 1d")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при муте: {str(e)}")
-
-@only_in_chats
-async def unmute_user(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Только администраторы могут размучивать пользователей!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Использование: /unmute @username")
-        return
-    
-    target_username = context.args[0]
-    
-    if not target_username.startswith('@'):
-        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
-        return
-    
-    target_username = target_username[1:]
-    
-    try:
-        cursor.execute("DELETE FROM mutes WHERE username = ?", (target_username,))
-        conn.commit()
-        
-        if cursor.rowcount > 0:
-            await update.message.reply_text(f"🔊 Пользователь @{target_username} размьючен!")
-        else:
-            await update.message.reply_text(f"❌ Пользователь @{target_username} не найден в списке мутов.")
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при размуте: {str(e)}")
-
-@only_in_chats
-async def check_warns(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Только администраторы могут просматривать варны!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Использование: /warns @username")
-        return
-    
-    target_username = context.args[0]
-    
-    if not target_username.startswith('@'):
-        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
-        return
-    
-    target_username = target_username[1:]
-    
-    try:
-        cursor.execute("SELECT reason, warned_by, warn_date FROM warns WHERE username = ? ORDER BY warn_date DESC", (target_username,))
-        warns = cursor.fetchall()
-        
-        cursor.execute("SELECT COUNT(*) FROM warns WHERE username = ?", (target_username,))
-        warn_count = cursor.fetchone()[0]
-        
-        if not warns:
-            await update.message.reply_text(f"✅ У @{target_username} нет варнов.")
-            return
-        
-        text = f"⚠️ Варны пользователя @{target_username} ({warn_count}/3):\n\n"
-        
-        for i, (reason, warned_by, warn_date) in enumerate(warns, 1):
-            text += f"{i}. {reason}\n"
-            text += f"   Выдал: {warned_by} | {warn_date[:16]}\n\n"
-        
-        await update.message.reply_text(text)
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при проверке варнов: {str(e)}")
-
-@only_in_chats
-async def ban_list(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Только администраторы могут просматривать список банов!")
-        return
-    
-    try:
-        cursor.execute("SELECT username, reason, banned_by, ban_date FROM bans ORDER BY ban_date DESC")
-        bans = cursor.fetchall()
-        
-        if not bans:
-            await update.message.reply_text("📭 Список банов пуст.")
-            return
-        
-        text = "🚨 Список забаненных пользователей:\n\n"
-        
-        for username, reason, banned_by, ban_date in bans:
-            text += f"👤 @{username}\n"
-            text += f"📝 Причина: {reason}\n"
-            text += f"👮 Забанен: {banned_by}\n"
-            text += f"📅 Дата: {ban_date[:16]}\n"
-            text += "─" * 30 + "\n"
-        
-        await update.message.reply_text(text)
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при получении списка банов: {str(e)}")
-
-@only_in_chats
-async def add_admin(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Только владелец может добавлять администраторов!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Использование: /add_admin @username или /add_admin 123456789")
-        return
-    
-    target = context.args[0]
-    
-    try:
-        if target.isdigit():
-            admin_id = int(target)
-            cursor.execute("INSERT OR REPLACE INTO admins (admin_id, role) VALUES (?, 'admin')", (admin_id,))
-            conn.commit()
-            await update.message.reply_text(f"✅ Администратор добавлен! ID: {admin_id}")
-            
-        elif target.startswith('@'):
-            username = target[1:]
-            await update.message.reply_text(
-                f"❌ Для добавления администратора нужен User ID.\n\n"
-                f"Попросите пользователя @{username} отправить свой ID (можно узнать через @userinfobot)"
-            )
-        else:
-            await update.message.reply_text("❌ Неверный формат. Используйте: /add_admin @username или /add_admin 123456789")
-            
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
-
-@only_in_chats
-async def add_owner(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Только владелец может добавлять других владельцев!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Использование: /add_owner @username или /add_owner 123456789")
-        return
-    
-    target = context.args[0]
-    
-    try:
-        if target.isdigit():
-            owner_id = int(target)
-            cursor.execute("INSERT OR REPLACE INTO admins (admin_id, role) VALUES (?, 'owner')", (owner_id,))
-            conn.commit()
-            await update.message.reply_text(f"✅ Владелец добавлен! ID: {owner_id}")
-            
-        elif target.startswith('@'):
-            username = target[1:]
-            await update.message.reply_text(
-                f"❌ Для добавления владельца нужен User ID.\n\n"
-                f"Попросите пользователя @{username} отправить свой ID (можно узнать через @userinfobot)"
-            )
-        else:
-            await update.message.reply_text("❌ Неверный формат. Используйте: /add_owner @username или /add_owner 123456789")
-            
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
-
-@only_in_chats
-async def list_admins(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Только владелец может просматривать список администраторов!")
-        return
-    
-    cursor.execute("SELECT admin_id, username, role FROM admins ORDER BY role DESC, admin_id")
-    admins = cursor.fetchall()
-    
-    if not admins:
-        await update.message.reply_text("📭 В базе нет администраторов.")
-        return
-    
-    text = "👥 Список администраторов:\n\n"
-    for admin in admins:
-        admin_id, username, role = admin
-        role_icon = "👑" if role == 'owner' else "👮"
-        username_display = f"@{username}" if username else f"ID: {admin_id}"
-        text += f"{role_icon} {username_display} ({role})\n"
-    
-    await update.message.reply_text(text)
-
-@only_in_chats
-async def stats(update: Update, context: CallbackContext):
-    """Показать статистику базы"""
-    cursor.execute("SELECT COUNT(*) FROM scammers")
-    scammer_count = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM admins")
-    admin_count = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM bans")
-    ban_count = cursor.fetchone()[0]
-    
-    text = f"📊 Статистика: Скамеров: {scammer_count}, Админов: {admin_count}, Банов: {ban_count}"
-    await update.message.reply_text(text)
-
-def main():
-    """Основная функция запуска"""
-    print("🔄 Создаем application...")
-    
-    # Создаем application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # ДОБАВЛЯЕМ ВСЕ КОМАНДЫ
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("check", check_user))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("ban", ban_user))
-    application.add_handler(CommandHandler("unban", unban_user))
-    application.add_handler(CommandHandler("warn", warn_user))
-    application.add_handler(CommandHandler("mute", mute_user))
-    application.add_handler(CommandHandler("add_scammer", add_scammer))
-    application.add_handler(CommandHandler("add_owner", add_owner))
-    application.add_handler(CommandHandler("add_admin", add_admin))
-    application.add_handler(CommandHandler("list_admins", list_admins))
-    
-    print("✅ Application создан, запускаем polling...")
-    
-    # Запускаем бота (БЕЗ asyncio.run!)
-    application.run_polling()
-
-if __name__ == '__main__':
-    print("🚀 Запускаем бота...")
-    
-    # Инициализация БД
-    init_db()
-    print("📊 База данных инициализирована")
-    
-    # Запуск (просто вызываем функцию)
-    main()
-
-
-
-
+                f"Пользователь @{target_username} получил бан за 3 ва
