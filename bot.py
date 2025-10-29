@@ -795,35 +795,17 @@ async def list_admins(update: Update, context: CallbackContext):
 
 @only_in_chats
 async def stats(update: Update, context: CallbackContext):
+    """Показать статистику базы"""
     cursor.execute("SELECT COUNT(*) FROM scammers")
-    total_scammers = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM scammers WHERE date(added_date) = date('now')")
-    today_scammers = cursor.fetchone()[0]
+    scammer_count = cursor.fetchone()[0]
     
     cursor.execute("SELECT COUNT(*) FROM admins")
-    total_admins = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM admins WHERE role = 'owner'")
-    total_owners = cursor.fetchone()[0]
+    admin_count = cursor.fetchone()[0]
     
     cursor.execute("SELECT COUNT(*) FROM bans")
-    total_bans = cursor.fetchone()[0]
+    ban_count = cursor.fetchone()[0]
     
-    cursor.execute("SELECT COUNT(*) FROM warns")
-    total_warns = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM mutes")
-    total_mutes = cursor.fetchone()[0]
-    
-    text = (
-        "📊 СТАТИСТИКА БАЗЫ СКАМЕРОВ\n\n"
-        f"• 🚨 Всего скамеров: {total_scammers}\n"
-        f"🚨 Скамеров в базе: {scammer_count}\n"
-        f"👮 Администраторов: {admin_count}\n"
-        f"🔨 Активных банов: {ban_count}"
-    )
-    
+    text = f"📊 Статистика: Скамеров: {scammer_count}, Админов: {admin_count}, Банов: {ban_count}"
     await update.message.reply_text(text)
 
 def main():
@@ -858,3 +840,4 @@ if __name__ == '__main__':
     
     # Запуск (просто вызываем функцию)
     main()
+
