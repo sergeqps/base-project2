@@ -325,7 +325,95 @@ async def check_user(update: Update, context: CallbackContext):
         username = search_query[1:].lower()
         cursor.execute("SELECT admin_id, username, role FROM admins WHERE LOWER(username) = ?", (username,))
         admin_data = cursor.fetchone()
+
+@only_in_chats
+async def add_owner(update: Update, context: CallbackContext):
+    """Добавить владельца - только для текущего владельца"""
+    user_id = update.effective_user.id
+    
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ Только владелец бота может добавлять других владельцев!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("❌ Использование: /add_owner @username")
+        return
+    
+    target_username = context.args[0]
+    
+    if not target_username.startswith('@'):
+        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
+        return
+    
+    target_username = target_username[1:]
+    
+    try:
+        # Здесь нужно получить ID пользователя по username
+        # Пока добавляем с ID=0, нужно будет получить реальный ID
+        cursor.execute("INSERT OR REPLACE INTO admins (admin_id, username, role) VALUES (?, ?, 'owner')",
+                      (0, target_username))
+        conn.commit()
         
+        await update.message.reply_text(f"✅ Пользователь @{target_username} добавлен как владелец!\n\n⚠️ Нужно указать его ID вручную в базе данных.")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при добавлении владельца: {str(e)}")
+
+@only_in_chats
+async def add_admin(update: Update, context: CallbackContext):
+    """Добавить администратора - только для владельца"""
+    user_id = update.effective_user.id
+    
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ Только владелец бота может добавлять администраторов!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("❌ Использование: /add_admin @username")
+        return
+    
+    target_username = context.args[0]
+    
+    if not target_username.startswith('@'):
+        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
+        return
+    
+    target_username = target_username[1:]
+    
+    try:
+        cursor.execute("INSERT OR REPLACE INTO admins (admin_id, username, role) VALUES (?, ?, 'admin')",
+                      (0, target_username))
+        conn.commit()
+        
+        await update.message.reply_text(f"✅ Пользователь @{target_username} добавлен как администратор!\n\n⚠️ Нужно указать его ID вручную в базе данных.")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при добавлении администратора: {str(e)}")
+
+@only_in_chats
+async def list_admins(update: Update, context: CallbackContext):
+    """Показать список всех администраторов"""
+    cursor.execute("SELECT admin_id, username, role FROM admins ORDER BY role DESC, username")
+    admins = cursor.fetchall()
+    
+    if not admins:
+        await update.message.reply_text("📋 Список администраторов пуст")
+        return
+    
+    text = "👑 ВЛАДЕЛЬЦЫ:\n"
+    owners = [admin for admin in admins if admin[2] == 'owner']
+    for admin in owners:
+        admin_id, username, role = admin
+        text += f"• ID: {admin_id}" + (f" | @{username}" if username else "") + "\n"
+    
+    text += "\n👮 АДМИНИСТРАТОРЫ:\n"
+    admins_list = [admin for admin in admins if admin[2] == 'admin']
+    for admin in admins_list:
+        admin_id, username, role = admin
+        text += f"• ID: {admin_id}" + (f" | @{username}" if username else "") + "\n"
+    
+    await update.message.reply_text(text)
+    
 @only_in_chats
 async def check_user(update: Update, context: CallbackContext):
     """Проверить пользователя"""
@@ -895,6 +983,7 @@ if __name__ == '__main__':
     
     # Запуск (просто вызываем функцию)
     main()
+
 
 
 
