@@ -877,6 +877,9 @@ def main():
     application.add_handler(CommandHandler("warn", warn_user))
     application.add_handler(CommandHandler("mute", mute_user))
     application.add_handler(CommandHandler("add_scammer", add_scammer))
+    application.add_handler(CommandHandler("add_owner", add_owner))
+    application.add_handler(CommandHandler("add_admin", add_admin))
+    application.add_handler(CommandHandler("list_admins", list_admins))
     
     print("✅ Application создан, запускаем polling...")
     
@@ -892,5 +895,6 @@ if __name__ == '__main__':
     
     # Запуск (просто вызываем функцию)
     main()
+
 
 
