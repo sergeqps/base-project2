@@ -22,7 +22,14 @@ if not BOT_TOKEN:
 
 print("🛡️ Бот базы скамеров запускается...")
 print(f"✅ YOUR_USER_ID: {YOUR_USER_ID}")
+print(f"🔑 BOT_TOKEN существует: {os.getenv('BOT_TOKEN') is not None}")
 
+# ЕСЛИ ТОКЕНА НЕТ - ВЫХОДИМ
+if not BOT_TOKEN:
+    print("❌ КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден!")
+    print("💡 Проверьте переменные окружения в Railway")
+    exit(1)
+    
 conn = sqlite3.connect('scammers.db', check_same_thread=False)
 cursor = conn.cursor()
 
@@ -813,6 +820,7 @@ async def stats(update: Update, context: CallbackContext):
         "📊 СТАТИСТИКА БАЗЫ СКАМЕРОВ\n\n"
         f"• 🚨 Всего скамеров: {total_scammers}\n"
     )
+
 
 
 
