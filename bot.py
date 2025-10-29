@@ -819,7 +819,13 @@ async def stats(update: Update, context: CallbackContext):
     text = (
         "📊 СТАТИСТИКА БАЗЫ СКАМЕРОВ\n\n"
         f"• 🚨 Всего скамеров: {total_scammers}\n"
+        f"🚨 Скамеров в базе: {scammer_count}\n"
+        f"👮 Администраторов: {admin_count}\n"
+        f"🔨 Активных банов: {ban_count}"
     )
+    
+    await update.message.reply_text(text)
+
 
 
 
