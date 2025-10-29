@@ -15,8 +15,7 @@ logging.basicConfig(
 
 # ⚠️ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
 BOT_TOKEN = os.getenv('8000079628:AAHle5Q39ZwlCSIMA7mP7j2AbJ7vfxrwf5E')
-YOUR_USER_ID = int(os.getenv('YOUR_USER_ID', '7892045071
-'))
+YOUR_USER_ID = int(os.getenv('YOUR_USER_ID', '7892045071'))
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не установлен! Добавьте его в переменные окружения.")
@@ -814,3 +813,4 @@ async def stats(update: Update, context: CallbackContext):
         "📊 СТАТИСТИКА БАЗЫ СКАМЕРОВ\n\n"
         f"• 🚨 Всего скамеров: {total_scammers}\n"
        
+
