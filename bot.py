@@ -811,7 +811,5 @@ async def stats(update: Update, context: CallbackContext):
     
     text = (
         "📊 СТАТИСТИКА БАЗЫ СКАМЕРОВ\n\n"
-        f"• 🚨 Всего скамеров: {total_scammers}\n")
-       
-
-
+        f"• 🚨 Всего скамеров: {total_scammers}\n"
+    )
