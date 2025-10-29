@@ -826,6 +826,40 @@ async def stats(update: Update, context: CallbackContext):
     
     await update.message.reply_text(text)
 
+import asyncio
+
+async def main():
+    """Основная асинхронная функция"""
+    print("🔄 Создаем application...")
+    
+    # Создаем application
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # ДОБАВЛЯЕМ ВСЕ КОМАНДЫ
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("check", check_user))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("ban", ban_user))
+    application.add_handler(CommandHandler("unban", unban_user))
+    application.add_handler(CommandHandler("warn", warn_user))
+    application.add_handler(CommandHandler("mute", mute_user))
+    application.add_handler(CommandHandler("add_scammer", add_scammer))
+    
+    print("✅ Application создан, запускаем polling...")
+    
+    # Запускаем бота
+    await application.run_polling()
+
+if __name__ == '__main__':
+    print("🚀 Запускаем основную функцию...")
+    
+    # Инициализация БД
+    init_db()
+    print("📊 База данных инициализирована")
+    
+    # Запуск асинхронной функции
+    asyncio.run(main())
 
 
 
