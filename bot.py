@@ -813,6 +813,10 @@ async def stats(update: Update, context: CallbackContext):
         "📊 СТАТИСТИКА БАЗЫ СКАМЕРОВ\n\n"
         f"• 🚨 Всего скамеров: {total_scammers}\n"
     )
+if __name__ == '__main__':
+    print("🔄 Запускаем бота...")
+    application.run_polling()
+    print("✅ Бот запущен!")
 
 
 
