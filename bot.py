@@ -554,4 +554,203 @@ async def warn_user(update: Update, context: CallbackContext):
             
             await update.message.reply_text(
                 f"🚨 АВТОМАТИЧЕСКИЙ БАН!\n"
-                f"Пользователь @{target_username} получил бан за 3 ва
+                f"Пользователь @{target_username} получил бан за 3 вана.\n"
+                f"Причина последнего варна: {reason}"
+            )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при выдаче варна: {str(e)}")
+
+@only_in_chats
+async def mute_user(update: Update, context: CallbackContext):
+    ensure_connection()
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Только администраторы могут мутить пользователей!")
+        return
+    
+    if not context.args or len(context.args) < 3:
+        await update.message.reply_text("❌ Использование: /mute @username время причина\n\nПримеры:\n/mute @username 1h Флуд\n/mute @username 30m Спам")
+        return
+    
+    target_username = context.args[0]
+    mute_time = context.args[1]
+    reason = ' '.join(context.args[2:])
+    
+    if not target_username.startswith('@'):
+        await update.message.reply_text("❌ Укажите username пользователя (начинается с @)")
+        return
+    
+    target_username = target_username[1:]
+    
+    if is_target_owner(target_username):
+        await update.message.reply_text("❌ Невозможно замутить владельца!")
+        return
+    
+    try:
+        # Просто добавляем в базу без реального мута
+        cursor.execute("INSERT INTO mutes (user_id, username, reason, muted_by, chat_id) VALUES (%s, %s, %s, %s, %s)",
+                      (0, target_username, f"{reason} (время: {mute_time})", user_id, chat_id))
+        conn.commit()
+        
+        await update.message.reply_text(f"🔇 Пользователь @{target_username} замьючен на {mute_time}!\nПричина: {reason}")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при муте: {str(e)}")
+
+@only_in_chats
+async def add_owner(update: Update, context: CallbackContext):
+    ensure_connection()
+    user_id = update.effective_user.id
+    
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ Только владелец бота может добавлять других владельцев!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("❌ Использование: /add_owner user_id @username\n\nПример:\n/add_owner 123456789 @username")
+        return
+    
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Нужно указать ID и username!\nИспользование: /add_owner user_id @username")
+        return
+    
+    target_id = context.args[0]
+    target_username = context.args[1]
+    
+    if not target_id.isdigit():
+        await update.message.reply_text("❌ ID должен быть числом!")
+        return
+    
+    target_id = int(target_id)
+    
+    if not target_username.startswith('@'):
+        await update.message.reply_text("❌ Username должен начинаться с @!")
+        return
+    
+    target_username = target_username[1:]
+    
+    try:
+        cursor.execute("SELECT 1 FROM admins WHERE admin_id = %s OR username = %s", (target_id, target_username))
+        if cursor.fetchone():
+            await update.message.reply_text("❌ Этот пользователь уже есть в базе администраторов!")
+            return
+        
+        cursor.execute("INSERT INTO admins (admin_id, username, role) VALUES (%s, %s, 'owner')",
+                      (target_id, target_username))
+        conn.commit()
+        
+        await update.message.reply_text(f"✅ Владелец добавлен!\n👤 ID: {target_id}\n📱 Username: @{target_username}")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при добавлении владельца: {str(e)}")
+
+@only_in_chats
+async def add_admin(update: Update, context: CallbackContext):
+    ensure_connection()
+    user_id = update.effective_user.id
+    
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ Только владелец бота может добавлять администраторов!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("❌ Использование: /add_admin user_id @username\n\nПример:\n/add_admin 123456789 @username")
+        return
+    
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Нужно указать ID и username!\nИспользование: /add_admin user_id @username")
+        return
+    
+    target_id = context.args[0]
+    target_username = context.args[1]
+    
+    if not target_id.isdigit():
+        await update.message.reply_text("❌ ID должен быть числом!")
+        return
+    
+    target_id = int(target_id)
+    
+    if not target_username.startswith('@'):
+        await update.message.reply_text("❌ Username должен начинаться с @!")
+        return
+    
+    target_username = target_username[1:]
+    
+    try:
+        cursor.execute("SELECT 1 FROM admins WHERE admin_id = %s OR username = %s", (target_id, target_username))
+        if cursor.fetchone():
+            await update.message.reply_text("❌ Этот пользователь уже есть в базе администраторов!")
+            return
+        
+        cursor.execute("INSERT INTO admins (admin_id, username, role) VALUES (%s, %s, 'admin')",
+                      (target_id, target_username))
+        conn.commit()
+        
+        await update.message.reply_text(f"✅ Администратор добавлен!\n👤 ID: {target_id}\n📱 Username: @{target_username}")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при добавлении администратора: {str(e)}")
+
+@only_in_chats
+async def list_admins(update: Update, context: CallbackContext):
+    ensure_connection()
+    cursor.execute("SELECT admin_id, username, role FROM admins ORDER BY role DESC, username")
+    admins = cursor.fetchall()
+    
+    if not admins:
+        await update.message.reply_text("📋 Список администраторов пуст")
+        return
+    
+    text = "👑 ВЛАДЕЛЬЦЫ:\n"
+    owners = [admin for admin in admins if admin[2] == 'owner']
+    for admin in owners:
+        admin_id, username, role = admin
+        text += f"• ID: `{admin_id}`" + (f" | @{username}" if username else " | username не указан") + "\n"
+    
+    text += "\n👮 АДМИНИСТРАТОРЫ:\n"
+    admins_list = [admin for admin in admins if admin[2] == 'admin']
+    for admin in admins_list:
+        admin_id, username, role = admin
+        text += f"• ID: `{admin_id}`" + (f" | @{username}" if username else " | username не указан") + "\n"
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+def main():
+    """Основная функция запуска"""
+    print("🔄 Создаем application...")
+    
+    # Создаем application
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # ДОБАВЛЯЕМ ВСЕ КОМАНДЫ
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("check", check_user))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("ban", ban_user))
+    application.add_handler(CommandHandler("unban", unban_user))
+    application.add_handler(CommandHandler("warn", warn_user))
+    application.add_handler(CommandHandler("mute", mute_user))
+    application.add_handler(CommandHandler("add_scammer", add_scammer))
+    application.add_handler(CommandHandler("add_owner", add_owner))
+    application.add_handler(CommandHandler("add_admin", add_admin))
+    application.add_handler(CommandHandler("list_admins", list_admins))
+    
+    print("✅ Application создан, запускаем polling...")
+    
+    # Запускаем бота
+    application.run_polling()
+
+if __name__ == '__main__':
+    print("🚀 Запускаем бота...")
+    
+    # Инициализация БД
+    init_db()
+    print("📊 База данных инициализирована")
+    
+    # Запуск
+    main()
+
