@@ -326,34 +326,86 @@ async def check_user(update: Update, context: CallbackContext):
         cursor.execute("SELECT admin_id, username, role FROM admins WHERE LOWER(username) = ?", (username,))
         admin_data = cursor.fetchone()
         
-        if admin_data:
-            admin_id, username, role = admin_data
-            user_info = f"ID: {admin_id} | @{username}"
-            image_bytes = create_status_image('владелец' if role == 'owner' else 'администратор', user_info)
+@only_in_chats
+async def check_user(update: Update, context: CallbackContext):
+    """Проверить пользователя"""
+    if not context.args:
+        await update.message.reply_text("❌ Использование: /check @username или /check 123456789")
+        return
+    
+    search_query = context.args[0].strip()
+    print(f"🔍 Поиск: {search_query}")  # Для отладки
+
+    # Проверяем базу скамеров
+    if search_query.isdigit():
+        # Поиск по ID в скамерах
+        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE user_id = ?", (int(search_query),))
+        scammer_data = cursor.fetchone()
+        
+        if scammer_data:
+            user_id, username, proof, scam_type = scammer_data
+            user_info = f"ID: {user_id}" + (f" | @{username}" if username else "")
             
-            role_text = "👑 ВЛАДЕЛЕЦ" if role == 'owner' else "👮 АДМИНИСТРАТОР"
-            text = f"{role_text}\n\n👤 ID: `{admin_id}`\n📱 Username: @{username}\n"
-            text += f"💼 Роль: {role}"
+            text = f"🚨 НАЙДЕН В БАЗЕ СКАМЕРОВ!\n\n👤 ID: `{user_id}`\n"
+            if username:
+                text += f"📱 Username: @{username}\n"
+            if scam_type:
+                text += f"🎯 Тип скама: {scam_type}\n"
+            text += f"📝 Пруфы: {proof}"
             
-            await update.message.reply_photo(
-                photo=image_bytes,
-                caption=text,
-                parse_mode='Markdown'
-            )
+            await update.message.reply_text(text, parse_mode='Markdown')
             return
 
-    # Если не найден нигде - обычный пользователь
-    user_info = f"Запрос: {search_query}"
-    image_bytes = create_status_image('обычный пользователь', user_info)
-    
-    text = "✅ ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ\n\nНе найден в базе скамеров и не является администратором."
-    
-    await update.message.reply_photo(
-        photo=image_bytes,
-        caption=text,
-        parse_mode='Markdown'
-    )
+    elif search_query.startswith('@'):
+        # Поиск по username в скамерах
+        username = search_query[1:].lower()
+        cursor.execute("SELECT user_id, username, proof, scam_type FROM scammers WHERE LOWER(username) = ?", (username,))
+        scammer_data = cursor.fetchone()
+        
+        if scammer_data:
+            user_id, username, proof, scam_type = scammer_data
+            user_info = f"ID: {user_id} | @{username}"
+            
+            text = f"🚨 НАЙДЕН В БАЗЕ СКАМЕРОВ!\n\n👤 ID: `{user_id}`\n📱 Username: @{username}\n"
+            if scam_type:
+                text += f"🎯 Тип скама: {scam_type}\n"
+            text += f"📝 Пруфы: {proof}"
+            
+            await update.message.reply_text(text, parse_mode='Markdown')
+            return
 
+    # Проверяем админов
+    if search_query.isdigit():
+        cursor.execute("SELECT admin_id, username, role FROM admins WHERE admin_id = ?", (int(search_query),))
+        admin_data = cursor.fetchone()
+        
+        if admin_data:
+            admin_id, username, role = admin_data
+            role_text = "👑 ВЛАДЕЛЕЦ" if role == 'owner' else "👮 АДМИНИСТРАТОР"
+            text = f"{role_text}\n\n👤 ID: `{admin_id}`\n"
+            if username:
+                text += f"📱 Username: @{username}\n"
+            text += f"💼 Роль: {role}"
+            
+            await update.message.reply_text(text, parse_mode='Markdown')
+            return
+
+    elif search_query.startswith('@'):
+        username = search_query[1:].lower()
+        cursor.execute("SELECT admin_id, username, role FROM admins WHERE LOWER(username) = ?", (username,))
+        admin_data = cursor.fetchone()
+        
+        if admin_data:
+            admin_id, username, role = admin_data
+            role_text = "👑 ВЛАДЕЛЕЦ" if role == 'owner' else "👮 АДМИНИСТРАТОР"
+            text = f"{role_text}\n\n👤 ID: `{admin_id}`\n📱 Username: @{username}\n💼 Роль: {role}"
+            
+            await update.message.reply_text(text, parse_mode='Markdown')
+            return
+
+    # Если не найден нигде
+    text = "✅ ОБЫЧНЫЙ ПОЛЬЗОВАТЕЛЬ\n\nНе найден в базе скамеров и не является администратором."
+    await update.message.reply_text(text, parse_mode='Markdown')
 @only_in_chats
 async def add_scammer(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
@@ -840,4 +892,5 @@ if __name__ == '__main__':
     
     # Запуск (просто вызываем функцию)
     main()
+
 
